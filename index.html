@@ -123,7 +123,7 @@
   function fichar() {
     pinta('⏳', 'Fichando…', 'Validando la etiqueta', 'cargando');
     geo(function (g, acc) {
-      api({ a: 'fichar', p: q.p, k: q.k, c: contador(), t: localStorage.getItem(LS_TOKEN) || '', geo: g, acc: acc, dev: dispositivo() },
+      api({ a: 'fichar', p: q.p, k: q.k, cnt: contador(), t: localStorage.getItem(LS_TOKEN) || '', geo: g, acc: acc, dev: dispositivo() },
         function (r) {
           if (r.ok) return exito(r);
           if (r.realta) return pedirAlta('Este móvil no está dado de alta');
@@ -160,7 +160,7 @@
       var v = cod.value.trim();
       if (!v) return;
       btn.disabled = true; btn.textContent = 'Vinculando…';
-      api({ a: 'alta', p: q.p, k: q.k, c: contador(), codigo: v, dev: dispositivo() }, function (r) {
+      api({ a: 'alta', p: q.p, k: q.k, cnt: contador(), codigo: v, dev: dispositivo() }, function (r) {
         if (!r.ok) {
           btn.disabled = false; btn.textContent = 'Vincular este móvil';
           $('sub').innerHTML = '<span class="err">' + r.error + '</span>';
