@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#05070a">
+<link rel="icon" href="favicon.svg">
+<title>Fichaje NFC</title>
+<style>
+  :root{ --bg:#05070a; --panel:#0d1218; --line:#1c2733; --tx:#e6f1ff; --dim:#7c8ea3;
+         --ok:#17ff5f; --err:#ff4d5e; --warn:#ffb020; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;min-height:100dvh;background:var(--bg);color:var(--tx);
+       font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px}
+  .wrap{width:100%;max-width:420px}
+  .marca{text-align:center;color:var(--dim);letter-spacing:.28em;font-size:11px;text-transform:uppercase;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px 22px;text-align:center}
+  .icono{font-size:46px;line-height:1;margin-bottom:10px}
+  h1{font-size:19px;margin:0 0 6px;letter-spacing:.02em}
+  .hora{font-size:46px;font-weight:700;letter-spacing:.02em;margin:6px 0 2px}
+  .sub{color:var(--dim);font-size:13px}
+  .ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)}
+  .chip{display:inline-block;margin-top:14px;padding:6px 12px;border:1px solid var(--line);
+        border-radius:999px;font-size:12px;color:var(--dim)}
+  .campo{width:100%;margin-top:16px;padding:15px;background:#070b0f;border:1px solid var(--line);
+         border-radius:12px;color:var(--tx);font:inherit;text-align:center;letter-spacing:.18em;text-transform:uppercase}
+  .campo:focus{outline:none;border-color:var(--ok)}
+  button{width:100%;margin-top:12px;padding:15px;border:0;border-radius:12px;background:var(--ok);
+         color:#03130a;font:inherit;font-weight:700;letter-spacing:.06em;cursor:pointer}
+  button:disabled{opacity:.45}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--dim);font-weight:400}
+  .lista{margin-top:18px;border-top:1px solid var(--line);padding-top:14px;text-align:left;font-size:13px}
+  .lista div{display:flex;justify-content:space-between;padding:3px 0;color:var(--dim)}
+  .lista b{color:var(--tx);font-weight:600}
+  .pie{margin-top:16px;text-align:center;color:#40505f;font-size:11px}
+  .pie a{color:#40505f}
+  @keyframes lat{0%,100%{opacity:.35}50%{opacity:1}}
+  .cargando{animation:lat 1.1s infinite}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="marca" id="marca">Fichaje NFC</div>
+
+  <div class="card" id="card">
+    <div class="icono" id="icono">📡</div>
+    <h1 id="titulo" class="cargando">Leyendo etiqueta…</h1>
+    <div class="sub" id="sub">Un momento</div>
+    <div id="extra"></div>
+  </div>
+
+  <div class="pie">
+    <span id="pie"></span>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var API = '__API_URL__';
+  var LS_TOKEN = 'fichaje_token', LS_NOMBRE = 'fichaje_nombre';
+
+  var q = {};
+  location.search.replace(/^\?/, '').split('&').forEach(function (par) {
+    if (!par) return;
+    var i = par.indexOf('=');
+    var k = decodeURIComponent(i < 0 ? par : par.slice(0, i));
+    var v = decodeURIComponent((i < 0 ? '' : par.slice(i + 1)).replace(/\+/g, ' '));
+    q[k] = v;
+  });
+
+  // El counter mirror del NTAG216 son 6 hex. Si TagWriter lo coloca en otro
+  // sitio de la URL, lo buscamos en cualquier parámetro que sea solo 6 hex.
+  function contador() {
+    if (/^[0-9A-Fa-f]{6}$/.test(q.c || '')) return q.c;
+    for (var k in q) if (k !== 'k' && /^[0-9A-Fa-f]{6}$/.test(q[k])) return q[k];
+    var m = (q.c || '').match(/[0-9A-Fa-f]{6}/);
+    return m ? m[0] : '';
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+  function pinta(icono, titulo, sub, clase) {
+    $('icono').textContent = icono;
+    $('titulo').textContent = titulo;
+    $('titulo').className = clase || '';
+    $('sub').innerHTML = sub || '';
+  }
+
+  var n = 0;
+  function api(params, cb) {
+    var nombre = 'jsonp_' + (++n) + '_' + Date.now();
+    var s = document.createElement('script');
+    var t = setTimeout(function () { limpiar(); cb({ ok: false, error: 'Sin conexión con el servidor' }); }, 20000);
+    function limpiar() { clearTimeout(t); try { delete window[nombre]; } catch (e) { window[nombre] = null; } if (s.parentNode) s.parentNode.removeChild(s); }
+    window[nombre] = function (r) { limpiar(); cb(r); };
+    var qs = Object.keys(params).map(function (k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
+    s.src = API + '?' + qs + '&callback=' + nombre;
+    s.onerror = function () { limpiar(); cb({ ok: false, error: 'No se pudo contactar con el servidor' }); };
+    document.body.appendChild(s);
+  }
+
+  function geo(cb) {
+    if (!navigator.geolocation) return cb('', '');
+    var hecho = false;
+    var t = setTimeout(function () { if (!hecho) { hecho = true; cb('', ''); } }, 3000);
+    navigator.geolocation.getCurrentPosition(function (p) {
+      if (hecho) return; hecho = true; clearTimeout(t);
+      cb(p.coords.latitude.toFixed(5) + ',' + p.coords.longitude.toFixed(5), Math.round(p.coords.accuracy));
+    }, function () { if (!hecho) { hecho = true; clearTimeout(t); cb('', ''); } },
+      { enableHighAccuracy: true, timeout: 3000, maximumAge: 60000 });
+  }
+
+  function dispositivo() {
+    var ua = navigator.userAgent;
+    if (/iPhone|iPad/.test(ua)) return 'iPhone';
+    if (/Android/.test(ua)) return 'Android';
+    return ua.slice(0, 40);
+  }
+
+  /* ─────────── flujos ─────────── */
+
+  function fichar() {
+    pinta('⏳', 'Fichando…', 'Validando la etiqueta', 'cargando');
+    geo(function (g, acc) {
+      api({ a: 'fichar', p: q.p, k: q.k, c: contador(), t: localStorage.getItem(LS_TOKEN) || '', geo: g, acc: acc, dev: dispositivo() },
+        function (r) {
+          if (r.ok) return exito(r);
+          if (r.realta) return pedirAlta('Este móvil no está dado de alta');
+          pinta('⛔', 'No registrado', r.error, 'err');
+          $('extra').innerHTML = '<button class="ghost" onclick="location.reload()">Reintentar</button>';
+        });
+    });
+  }
+
+  function exito(r) {
+    var entrada = r.tipo === 'entrada';
+    $('icono').textContent = entrada ? '🟢' : '🔴';
+    $('titulo').textContent = entrada ? 'ENTRADA' : 'SALIDA';
+    $('titulo').className = entrada ? 'ok' : 'err';
+    var h = Math.floor(r.horas_hoy / 60), m = r.horas_hoy % 60;
+    $('sub').innerHTML = r.nombre + ' · ' + r.punto;
+    $('extra').innerHTML =
+      '<div class="hora">' + r.hora + '</div>' +
+      '<div class="sub">' + r.fecha + '</div>' +
+      '<div class="chip">Hoy: ' + h + ' h ' + ('0' + m).slice(-2) + ' min</div>';
+    if (navigator.vibrate) navigator.vibrate(entrada ? [40, 60, 40] : 120);
+    $('pie').textContent = 'Lectura nº ' + r.contador + ' de la etiqueta';
+  }
+
+  function pedirAlta(motivo) {
+    pinta('🔑', 'Alta del móvil', (motivo || '') + '<br>Escribe tu código de empleado');
+    $('extra').innerHTML =
+      '<input class="campo" id="cod" inputmode="text" autocapitalize="characters" autocomplete="off" placeholder="CÓDIGO">' +
+      '<button id="btn">Vincular este móvil</button>';
+    var btn = $('btn'), cod = $('cod');
+    cod.focus();
+    cod.addEventListener('keydown', function (e) { if (e.key === 'Enter') btn.click(); });
+    btn.addEventListener('click', function () {
+      var v = cod.value.trim();
+      if (!v) return;
+      btn.disabled = true; btn.textContent = 'Vinculando…';
+      api({ a: 'alta', p: q.p, k: q.k, c: contador(), codigo: v, dev: dispositivo() }, function (r) {
+        if (!r.ok) {
+          btn.disabled = false; btn.textContent = 'Vincular este móvil';
+          $('sub').innerHTML = '<span class="err">' + r.error + '</span>';
+          return;
+        }
+        localStorage.setItem(LS_TOKEN, r.token);
+        localStorage.setItem(LS_NOMBRE, r.nombre);
+        pinta('✅', 'Móvil vinculado', 'Hola, ' + r.nombre + '. Fichando…', 'ok');
+        $('extra').innerHTML = '';
+        setTimeout(fichar, 700);
+      });
+    });
+  }
+
+  function soloEstado() {
+    var token = localStorage.getItem(LS_TOKEN);
+    if (!token) {
+      pinta('📵', 'Acerca el móvil al tag', 'Este móvil aún no está vinculado. Toca la etiqueta NFC del local para empezar.');
+      return;
+    }
+    pinta('⏳', 'Consultando…', '', 'cargando');
+    api({ a: 'estado', t: token }, function (r) {
+      if (!r.ok) return pinta('⛔', 'Error', r.error, 'err');
+      $('icono').textContent = r.dentro ? '🟢' : '⚪';
+      $('titulo').textContent = r.dentro ? 'Estás dentro' : 'Estás fuera';
+      $('titulo').className = r.dentro ? 'ok' : '';
+      var h = Math.floor(r.horas_hoy / 60), m = r.horas_hoy % 60;
+      var html = '<div class="sub">' + r.nombre + '</div>' +
+                 '<div class="chip">Hoy: ' + h + ' h ' + ('0' + m).slice(-2) + ' min</div>';
+      if (r.hoy && r.hoy.length) {
+        html += '<div class="lista">' + r.hoy.map(function (f) {
+          return '<div><span>' + (f.tipo === 'entrada' ? '🟢 Entrada' : '🔴 Salida') + '</span><b>' + f.hora.slice(0, 5) + '</b></div>';
+        }).join('') + '</div>';
+      }
+      html += '<div class="sub" style="margin-top:16px">Para fichar, acerca el móvil a la etiqueta del local.</div>';
+      $('sub').innerHTML = '';
+      $('extra').innerHTML = html;
+    });
+  }
+
+  /* ─────────── arranque ─────────── */
+
+  if (localStorage.getItem(LS_NOMBRE)) $('marca').textContent = localStorage.getItem(LS_NOMBRE);
+
+  if (q.p && q.k) {
+    if (localStorage.getItem(LS_TOKEN)) fichar(); else pedirAlta('Primera vez en este móvil');
+  } else {
+    soloEstado();
+  }
+
+  if (history.replaceState) history.replaceState(null, '', location.pathname);
+})();
+</script>
+</body>
+</html>
